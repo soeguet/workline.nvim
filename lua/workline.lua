@@ -92,16 +92,8 @@ M._save_to_file = function(path, table)
 end
 
 M.load = function()
-	custom_file_content = M._load_from_file(M.state.save_path) or {}
-
-	vim.notify(vim.inspect(custom_file_content))
-
-	-- if custom_file_content == nil then
-	-- 	M.state.custom_buffers.buf_content = M.state.buf_content
-	-- 	return
-	-- end
-
-	-- M.state.custom_buffers.buf_content = custom_file_content
+	local custom_file_content = M._load_from_file(M.state.save_path) or {}
+	M.state.custom_buffers = custom_file_content
 end
 
 M._load_from_file = function(save_path)
@@ -212,6 +204,7 @@ M._set_all_buffer_keymaps = function(buffer)
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "S", function()
+		M._save_changes_inmemory()
 		M._save_all_to_file()
 	end, { buffer = buffer })
 
@@ -227,7 +220,6 @@ M._set_all_buffer_keymaps = function(buffer)
 		print("wtf  " .. M.state.current_buffer_index)
 	end, { buffer = buffer })
 
-	-- Also override lowercase w
 	vim.keymap.set("n", "<c-s>", function()
 		vim.notify("saving content")
 	end, { buffer = buffer })
@@ -254,7 +246,7 @@ end
 
 vim.keymap.set("n", "<leader>0", "<CMD>lua require('workline').window()<CR>")
 
--- M.load()
+M.load()
 
 return M
 
