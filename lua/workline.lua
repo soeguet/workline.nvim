@@ -9,6 +9,7 @@ local M = {}
 ---@class State
 ---@field buffer_nr? integer
 ---@field save_path string
+---@field buffer_namespace? integer
 ---@field current_buffer_index integer
 ---@field default_buffer_content string[]
 ---@field custom_buffers ScratchBuffer[]
@@ -25,13 +26,19 @@ M.state = {
 	save_path = vim.fn.stdpath("data") .. "/custom_buffer_state.lua",
 	current_buffer_index = 1,
 	default_buffer_content = {
-		"# date",
+		"",
 		"",
 		"# date",
 		"",
-		"# date",
 		"",
 		"# date",
+		"",
+		"",
+		"# date",
+		"",
+		"",
+		"# date",
+		"",
 		"",
 	},
 	custom_buffers = {
@@ -50,6 +57,8 @@ M.state = {
 			},
 			active = true,
 			buf_content = {
+				"",
+				"",
 				"# this is the pre-set buffer",
 				"if you see this, loading from the file failed!",
 			},
@@ -69,6 +78,8 @@ M.state = {
 			},
 			active = true,
 			buf_content = {
+				"",
+				"",
 				"# 2this is the pre-set buffer2",
 				"2if you see this, loading from the file failed!",
 			},
@@ -96,43 +107,46 @@ M._save_to_file = function(path, table)
 	if file == nil then
 		print("Could not open file for writing: " .. path)
 		return
+	else
+		file:write(vim.inspect(table))
+		file:close()
 	end
-
-	file:write(vim.inspect(table))
-	file:close()
 end
 
 M.load = function()
-	local custom_file_content = M._load_from_file(M.state.save_path) or {}
+	local custom_file_content = M._load_from_file()
 	M.state.custom_buffers = custom_file_content
 	M.state.current_buffer_index = #M.state.custom_buffers
 end
 
-M._load_from_file = function(save_path)
-	local path = vim.fn.stdpath("data") .. "/custom_buffer_state.lua"
+M._load_from_file = function()
+	local file = io.open(M.state.save_path, "r")
+	local data
 
-	local file = io.open(path, "r")
 	if not file then
-		vim.notify("Could not open file for reading: " .. path, vim.log.levels.ERROR)
-		return nil
+		M._generate_simple_file()
+		return M._load_from_file()
+	else
+		data = file:read("*a")
 	end
-
-	local data = file:read("*a")
-
-	file:close()
 
 	if not data or data == "" then
-		vim.notify("File is empty or nil", vim.log.levels.WARN)
-		return nil
+		vim.notify("RIP", 2)
+		return M.state.custom_buffers
 	end
+
+	file:close()
+	vim.notify("data", data)
 
 	local ok, result = pcall(function()
 		return loadstring("return " .. data)()
 	end)
+
 	if not ok or not result then
 		vim.notify("Failed to parse file content: " .. tostring(result), vim.log.levels.ERROR)
-		return nil
+		return M.state.custom_buffers
 	end
+	vim.notify("result", result)
 
 	return result
 end
@@ -142,13 +156,16 @@ M.check_for_file = function()
 	if file == nil then
 		print("Could not open file for writing: " .. M.state.save_path)
 		return
+	else
+		file:close()
 	end
-	file:close()
 end
 
 M._generate_buffer = function()
 	-- Scratch-Buffer erstellen
 	local buffer = vim.api.nvim_create_buf(false, true) -- unlisted und ohne Datei
+
+	M.state.buffer_namespace = vim.api.nvim_create_namespace("workline_page_index")
 
 	-- Optionale Einstellungen für den Scratch-Buffer
 	vim.api.nvim_set_option_value("filetype", "markdown", { buf = buffer })
@@ -158,22 +175,37 @@ M._generate_buffer = function()
 	return buffer
 end
 
----@param index integer
-M._generate_buffer_content_from_buffer_object = function(index)
-	---@type ScratchBuffer
-	local content = M.state.custom_buffers[index]
+-- -@param index integer
+-- M._generate_buffer_content_from_buffer_object = function(index)
+-- 	---@type ScratchBuffer
+-- 	local content = M.state.custom_buffers[index]
+--
+-- 	if content == nil then
+-- 		vim.notify("Buffer does not exist", 2, {})
+-- 		return
+-- 	end
+--
+-- 	vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, content.buf_content)
+-- end
 
-	if content == nil then
-		vim.notify("Buffer does not exist", 2, {})
-		return
+M._generate_simple_file = function()
+	local file = io.open(M.state.save_path, "w")
+	if file then
+		file:write(vim.inspect(M.state.custom_buffers))
+		file:close()
+	else
+		vim.notify("something went wrong creating the file", 2, {})
 	end
-
-	vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, content.buf_content)
 end
 
 ---@param buffer_index integer
 M._generate_buffer_content_from_current_buffer_index = function(buffer_index)
-	local buffer = M.state.custom_buffers[buffer_index] or {}
+	if #M.state.custom_buffers == 0 then
+		vim.notify("#custom_buffers == 0!", 2, {})
+		return
+	end
+
+	local buffer = M.state.custom_buffers[buffer_index]
 
 	if buffer ~= nil then
 		vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, buffer.buf_content)
@@ -195,10 +227,10 @@ M._save_all_to_file = function()
 	if file == nil then
 		print("Could not open file for writing: " .. M.state.save_path)
 		return
+	else
+		file:write(vim.inspect(M.state.custom_buffers))
+		file:close()
 	end
-
-	file:write(vim.inspect(M.state.custom_buffers))
-	file:close()
 end
 
 M._generate_new_entry = function()
@@ -207,7 +239,7 @@ M._generate_new_entry = function()
 
 	table.insert(
 		new_buf_content,
-		2,
+		4,
 		string.format(
 			"%02d-%02d-%02d, %02d:%02d",
 			timestamp.year,
@@ -223,7 +255,7 @@ M._generate_new_entry = function()
 		active = true,
 		id = M._generate_id(),
 		timestamp = timestamp,
-		buf_content = M.state.default_buffer_content,
+		buf_content = new_buf_content,
 	}
 
 	table.insert(M.state.custom_buffers, #M.state.custom_buffers + 1, new_scratch)
@@ -231,6 +263,10 @@ end
 
 M._remove_entry = function()
 	table.remove(M.state.custom_buffers, M.state.current_buffer_index)
+end
+
+M._set_cursor_on_buffer_change = function()
+	vim.api.nvim_win_set_cursor(0, { 4, 0 })
 end
 
 ---@param buffer integer
@@ -254,6 +290,7 @@ M._set_all_buffer_keymaps = function(buffer)
 		M._generate_new_entry()
 		M.state.current_buffer_index = #M.state.custom_buffers
 		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
+		M._generate_buffer_extmark()
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "X", function()
@@ -263,7 +300,10 @@ M._set_all_buffer_keymaps = function(buffer)
 
 				-- check if index is now out-of-bounds
 				M.state.current_buffer_index = math.min(M.state.current_buffer_index, #M.state.custom_buffers)
-				M._generate_buffer_content_from_buffer_object(M.state.current_buffer_index)
+				-- M._generate_buffer_content_from_buffer_object(M.state.current_buffer_index)
+				M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
+				M._generate_buffer_extmark()
+				M._set_cursor_on_buffer_change()
 
 				M._save_changes_inmemory()
 				M._save_all_to_file()
@@ -274,14 +314,26 @@ M._set_all_buffer_keymaps = function(buffer)
 	vim.keymap.set("n", "L", function()
 		M.state.current_buffer_index = math.min(M.state.current_buffer_index + 1, #M.state.custom_buffers)
 		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
-		print("wtf  " .. M.state.current_buffer_index)
+		M._generate_buffer_extmark()
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "H", function()
 		M.state.current_buffer_index = math.max(M.state.current_buffer_index - 1, 1)
 		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
-		print("wtf  " .. M.state.current_buffer_index)
+		M._generate_buffer_extmark()
 	end, { buffer = buffer })
+end
+
+M._generate_buffer_extmark = function()
+	vim.api.nvim_buf_clear_namespace(M.state.buffer_nr, M.state.buffer_namespace, 0, -1)
+
+	-- Setze den virtuellen Text in der letzten Zeile
+	vim.api.nvim_buf_set_extmark(M.state.buffer_nr, M.state.buffer_namespace, 0, 0, {
+		virt_text = {
+			{ string.format("%d/%d Buffer", M.state.current_buffer_index, #M.state.custom_buffers) },
+		},
+		virt_text_pos = "eol", -- Text am Ende der Zeile anzeigen
+	})
 end
 
 M.window = function()
@@ -290,7 +342,9 @@ M.window = function()
 		M._set_all_buffer_keymaps(M.state.buffer_nr)
 	end
 
-	M._generate_buffer_content_from_buffer_object(M.state.current_buffer_index)
+	-- M._generate_buffer_content_from_buffer_object(M.state.current_buffer_index)
+	M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
+	M._generate_buffer_extmark()
 
 	vim.api.nvim_open_win(M.state.buffer_nr, true, {
 		relative = "editor",
