@@ -208,7 +208,14 @@ M._generate_new_entry = function()
 	table.insert(
 		new_buf_content,
 		2,
-		string.format("%s-%s-%s, %s:%s", timestamp.year, timestamp.month, timestamp.day, timestamp.hour, timestamp.min)
+		string.format(
+			"%02d-%02d-%02d, %02d:%02d",
+			timestamp.year,
+			timestamp.month,
+			timestamp.day,
+			timestamp.hour,
+			timestamp.min
+		)
 	)
 
 	---@type ScratchBuffer
@@ -245,13 +252,19 @@ M._set_all_buffer_keymaps = function(buffer)
 
 	vim.keymap.set("n", "N", function()
 		M._generate_new_entry()
+		M.state.current_buffer_index = #M.state.custom_buffers
+		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "X", function()
 		vim.ui.input({ prompt = "Are you sure? (y/n): " }, function(input)
 			if input == "y" then
 				M._remove_entry()
+
+				-- check if index is now out-of-bounds
+				M.state.current_buffer_index = math.min(M.state.current_buffer_index, #M.state.custom_buffers)
 				M._generate_buffer_content_from_buffer_object(M.state.current_buffer_index)
+
 				M._save_changes_inmemory()
 				M._save_all_to_file()
 			end
