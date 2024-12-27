@@ -10,6 +10,7 @@ local M = {}
 ---@field buffer_nr? integer
 ---@field save_path string
 ---@field current_buffer_index integer
+---@field default_buffer_content string[]
 ---@field custom_buffers ScratchBuffer[]
 
 ---@return string
@@ -23,6 +24,16 @@ end
 M.state = {
 	save_path = vim.fn.stdpath("data") .. "/custom_buffer_state.lua",
 	current_buffer_index = 1,
+	default_buffer_content = {
+		"# date",
+		"",
+		"# date",
+		"",
+		"# date",
+		"",
+		"# date",
+		"",
+	},
 	custom_buffers = {
 		{
 			id = M._generate_id(),
@@ -94,6 +105,7 @@ end
 M.load = function()
 	local custom_file_content = M._load_from_file(M.state.save_path) or {}
 	M.state.custom_buffers = custom_file_content
+	M.state.current_buffer_index = #M.state.custom_buffers
 end
 
 M._load_from_file = function(save_path)
@@ -171,8 +183,6 @@ M._generate_buffer_content_from_current_buffer_index = function(buffer_index)
 end
 
 M._save_changes_inmemory = function()
-	vim.notify("changes are saved inmemory. don't forget to save", 2, {})
-
 	---@type string[]
 	local current_buffer_content = vim.api.nvim_buf_get_lines(M.state.buffer_nr, 0, -1, false) or {}
 
@@ -189,13 +199,38 @@ M._save_all_to_file = function()
 
 	file:write(vim.inspect(M.state.custom_buffers))
 	file:close()
-	vim.notify("everything was saved to the file", 2, {})
+end
+
+M._generate_new_entry = function()
+	local timestamp = M._generate_timestamp()
+	local new_buf_content = M.state.default_buffer_content
+
+	table.insert(
+		new_buf_content,
+		2,
+		string.format("%s-%s-%s, %s:%s", timestamp.year, timestamp.month, timestamp.day, timestamp.hour, timestamp.min)
+	)
+
+	---@type ScratchBuffer
+	local new_scratch = {
+		active = true,
+		id = M._generate_id(),
+		timestamp = timestamp,
+		buf_content = M.state.default_buffer_content,
+	}
+
+	table.insert(M.state.custom_buffers, #M.state.custom_buffers + 1, new_scratch)
+end
+
+M._remove_entry = function()
+	table.remove(M.state.custom_buffers, M.state.current_buffer_index)
 end
 
 ---@param buffer integer
 M._set_all_buffer_keymaps = function(buffer)
 	vim.keymap.set("n", "q", function()
 		M._save_changes_inmemory()
+		M._save_all_to_file()
 		vim.api.nvim_win_close(0, true)
 	end, { buffer = buffer })
 
@@ -208,6 +243,21 @@ M._set_all_buffer_keymaps = function(buffer)
 		M._save_all_to_file()
 	end, { buffer = buffer })
 
+	vim.keymap.set("n", "N", function()
+		M._generate_new_entry()
+	end, { buffer = buffer })
+
+	vim.keymap.set("n", "X", function()
+		vim.ui.input({ prompt = "Are you sure? (y/n): " }, function(input)
+			if input == "y" then
+				M._remove_entry()
+				M._generate_buffer_content_from_buffer_object(M.state.current_buffer_index)
+				M._save_changes_inmemory()
+				M._save_all_to_file()
+			end
+		end)
+	end, { buffer = buffer })
+
 	vim.keymap.set("n", "L", function()
 		M.state.current_buffer_index = math.min(M.state.current_buffer_index + 1, #M.state.custom_buffers)
 		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
@@ -218,10 +268,6 @@ M._set_all_buffer_keymaps = function(buffer)
 		M.state.current_buffer_index = math.max(M.state.current_buffer_index - 1, 1)
 		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
 		print("wtf  " .. M.state.current_buffer_index)
-	end, { buffer = buffer })
-
-	vim.keymap.set("n", "<c-s>", function()
-		vim.notify("saving content")
 	end, { buffer = buffer })
 end
 
