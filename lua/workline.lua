@@ -2,9 +2,19 @@ local M = {}
 
 ---@class ScratchBuffer
 ---@field active boolean
+---@field visible? boolean
 ---@field id string
+---@field time_diff? TimeDiff
 ---@field timestamp? osdate
 ---@field buf_content string[]
+
+---@class TimeDiff
+---@field years? integer
+---@field months? integer
+---@field days? integer
+---@field hours? integer
+---@field minutes? integer
+---@field seconds? integer
 
 ---@class RowsInfo
 ---@field date_row number
@@ -103,29 +113,44 @@ M._calculate_time_diff = function()
 		return "00:00"
 	end
 
-	local timestamp_current = M.state.custom_buffers[M.state.current_buffer_index]
-	local timestamp_last = M.state.custom_buffers[M.state.current_buffer_index - 1]
+	local t_c = M.state.custom_buffers[M.state.current_buffer_index]
+	local t_l = M.state.custom_buffers[M.state.current_buffer_index - 1]
 
-	-- Zwei Zeitpunkte definieren
-	local time1 = { year = 2024, month = 12, day = 28, hour = 12, min = 0, sec = 0 }
-	local time2 = { year = 2024, month = 12, day = 29, hour = 14, min = 30, sec = 0 }
+	local time1 = {
+		year = t_c.timestamp.year,
+		month = t_c.timestamp.month,
+		day = t_c.timestamp.day,
+		hour = t_c.timestamp.hour,
+		min = t_c.timestamp.min,
+		sec = t_c.timestamp.sec,
+	}
+	local time2 = {
+		year = t_l.timestamp.year,
+		month = t_l.timestamp.month,
+		day = t_l.timestamp.day,
+		hour = t_l.timestamp.hour,
+		min = t_l.timestamp.min,
+		sec = t_l.timestamp.sec,
+	}
 
-	-- In Sekunden umwandeln
 	local timestamp1 = os.time(time1)
 	local timestamp2 = os.time(time2)
 
-	-- Differenz berechnen
-	local diff = os.difftime(timestamp2, timestamp1)
-	print("Zeitdifferenz in Sekunden:", diff)
+	local diff = os.difftime(timestamp1, timestamp2)
 
 	local days = math.floor(diff / (24 * 3600))
 	local hours = math.floor((diff % (24 * 3600)) / 3600)
 	local minutes = math.floor((diff % 3600) / 60)
 	local seconds = diff % 60
 
-	print(string.format("Differenz: %d Tage, %d Stunden, %d Minuten, %d Sekunden", days, hours, minutes, seconds))
+	M.state.custom_buffers[M.state.current_buffer_index].time_diff = {
+		days = days,
+		minutes = minutes,
+		seconds = seconds,
+		hours = hours,
+	}
 
-	return "DIFF"
+	return string.format("%dh %dm", hours, minutes)
 end
 
 ---@return osdate
@@ -233,6 +258,22 @@ M._generate_buffer_content_from_current_buffer_index = function(buffer_index)
 	end
 end
 
+---@param buffer_index integer
+M._generate_buffer_content_from_current_buffer_index_visible_only = function(buffer_index)
+	if #M.state.custom_buffers == 0 then
+		vim.notify("#custom_buffers == 0!", 2, {})
+		return
+	end
+
+	local buffer = M.state.custom_buffers[buffer_index]
+
+	if buffer ~= nil then
+		vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, buffer.buf_content)
+	else
+		vim.notify("error in updating buffer with new content", 2, {})
+	end
+end
+
 M._save_changes_inmemory = function()
 	---@type string[]
 	local current_buffer_content = vim.api.nvim_buf_get_lines(M.state.buffer_nr, 0, -1, false) or {}
@@ -282,10 +323,6 @@ M._generate_new_entry = function()
 		)
 	)
 
-	local diff_time = M._calculate_time_diff()
-	table.remove(new_buf_content, M.state.rows_info.diff_row)
-	table.insert(new_buf_content, M.state.rows_info.diff_row, diff_time)
-
 	---@type ScratchBuffer
 	local new_scratch = {
 		active = true,
@@ -326,6 +363,7 @@ M._set_all_buffer_keymaps = function(buffer)
 	vim.keymap.set("n", "N", function()
 		M._generate_new_entry()
 		M.state.current_buffer_index = #M.state.custom_buffers
+		M._insert_diff_time()
 		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
 		M._generate_buffer_extmark()
 	end, { buffer = buffer })
@@ -375,12 +413,54 @@ end
 M._test = function()
 	vim.notify("test3")
 end
-M._insert_diff_time = function(index)
-	--
-	local diff_time = M._calculate_time_diff()
 
-	table.remove(M.state.custom_buffers[index], M.state.rows_info.diff_row - 1)
-	table.insert(M.state.custom_buffers[index], M.state.rows_info.diff_row, diff_time)
+M._insert_diff_time = function()
+	local diff_time = M._calculate_time_diff()
+	local buffer = M.state.custom_buffers[#M.state.custom_buffers]
+	table.remove(buffer.buf_content, M.state.rows_info.diff_row)
+	table.insert(buffer.buf_content, M.state.rows_info.diff_row, diff_time)
+end
+
+M._filter_content_today = function()
+	local content = M.state.custom_buffers
+
+	local today = M._generate_timestamp()
+
+	for _, value in ipairs(M.state.custom_buffers) do
+		if
+			value.timestamp.year == today.year
+			and value.timestamp.month == today.month
+			and value.timestamp.day == today.day
+		then
+			value.visible = true
+		else
+			value.visible = false
+		end
+	end
+end
+
+M.today = function()
+	if M.state.buffer_nr == nil then
+		M.state.buffer_nr = M._generate_buffer()
+		M._set_all_buffer_keymaps(M.state.buffer_nr)
+	end
+
+	M._filter_content_today()
+
+	M._generate_buffer_content_from_current_buffer_index_visible_only(M.state.current_buffer_index)
+	M._generate_buffer_extmark()
+
+	vim.api.nvim_open_win(M.state.buffer_nr, true, {
+		relative = "editor",
+		row = 3,
+		col = 3,
+		width = 50,
+		height = 30,
+		border = "single",
+		style = "minimal",
+	})
+
+	M._set_cursor_on_buffer_change()
 end
 
 M.window = function()
