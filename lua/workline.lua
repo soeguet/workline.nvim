@@ -1,7 +1,7 @@
 local M = {}
 
 ---@class ScratchBuffer
----@field active boolean
+---@field disabled boolean or false
 ---@field visible? boolean
 ---@field id string
 ---@field time_diff? TimeDiff
@@ -28,7 +28,9 @@ local M = {}
 ---@field buffer_namespace? integer
 ---@field current_buffer_index integer
 ---@field default_buffer_content string[]
----@field custom_buffers ScratchBuffer[]
+---@field content_buffers ScratchBuffer[]
+---@field disabled_buffers ScratchBuffer[]
+---@field visibile_buffers? ScratchBuffer[]
 
 ---@return string
 M._generate_id = function()
@@ -62,7 +64,8 @@ M.state = {
 		"",
 		"",
 	},
-	custom_buffers = {
+	disabled_buffers = {},
+	content_buffers = {
 		{
 			id = M._generate_id(),
 			timestamp = {
@@ -76,7 +79,7 @@ M.state = {
 				yday = 362,
 				year = 2024,
 			},
-			active = true,
+			disabled = false,
 			buf_content = {
 				"",
 				"",
@@ -97,7 +100,7 @@ M.state = {
 				yday = 362,
 				year = 2024,
 			},
-			active = true,
+			disabled = false,
 			buf_content = {
 				"",
 				"",
@@ -113,8 +116,8 @@ M._calculate_time_diff = function()
 		return "00:00"
 	end
 
-	local t_c = M.state.custom_buffers[M.state.current_buffer_index]
-	local t_l = M.state.custom_buffers[M.state.current_buffer_index - 1]
+	local t_c = M.state.content_buffers[M.state.current_buffer_index]
+	local t_l = M.state.content_buffers[M.state.current_buffer_index - 1]
 
 	local time1 = {
 		year = t_c.timestamp.year,
@@ -143,7 +146,7 @@ M._calculate_time_diff = function()
 	local minutes = math.floor((diff % 3600) / 60)
 	local seconds = diff % 60
 
-	M.state.custom_buffers[M.state.current_buffer_index].time_diff = {
+	M.state.content_buffers[M.state.current_buffer_index].time_diff = {
 		days = days,
 		minutes = minutes,
 		seconds = seconds,
@@ -174,8 +177,8 @@ end
 
 M.load = function()
 	local custom_file_content = M._load_from_file()
-	M.state.custom_buffers = custom_file_content
-	M.state.current_buffer_index = #M.state.custom_buffers
+	M.state.content_buffers = custom_file_content
+	M.state.current_buffer_index = #M.state.content_buffers
 end
 
 M._load_from_file = function()
@@ -191,7 +194,7 @@ M._load_from_file = function()
 
 	if not data or data == "" then
 		vim.notify("RIP", 2)
-		return M.state.custom_buffers
+		return M.state.content_buffers
 	end
 
 	file:close()
@@ -203,7 +206,7 @@ M._load_from_file = function()
 
 	if not ok or not result then
 		vim.notify("Failed to parse file content: " .. tostring(result), vim.log.levels.ERROR)
-		return M.state.custom_buffers
+		return M.state.content_buffers
 	end
 	vim.notify("result", result)
 
@@ -235,7 +238,7 @@ end
 M._generate_simple_file = function()
 	local file = io.open(M.state.save_path, "w")
 	if file then
-		file:write(vim.inspect(M.state.custom_buffers))
+		file:write(vim.inspect(M.state.content_buffers))
 		file:close()
 	else
 		vim.notify("something went wrong creating the file", 2, {})
@@ -244,12 +247,12 @@ end
 
 ---@param buffer_index integer
 M._generate_buffer_content_from_current_buffer_index = function(buffer_index)
-	if #M.state.custom_buffers == 0 then
+	if #M.state.content_buffers == 0 then
 		vim.notify("#custom_buffers == 0!", 2, {})
 		return
 	end
 
-	local buffer = M.state.custom_buffers[buffer_index]
+	local buffer = M.state.content_buffers[buffer_index]
 
 	if buffer ~= nil then
 		vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, buffer.buf_content)
@@ -260,12 +263,12 @@ end
 
 ---@param buffer_index integer
 M._generate_buffer_content_from_current_buffer_index_visible_only = function(buffer_index)
-	if #M.state.custom_buffers == 0 then
+	if #M.state.content_buffers == 0 then
 		vim.notify("#custom_buffers == 0!", 2, {})
 		return
 	end
 
-	local buffer = M.state.custom_buffers[buffer_index]
+	local buffer = M.state.visibile_buffers[buffer_index]
 
 	if buffer ~= nil then
 		vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, buffer.buf_content)
@@ -278,7 +281,7 @@ M._save_changes_inmemory = function()
 	---@type string[]
 	local current_buffer_content = vim.api.nvim_buf_get_lines(M.state.buffer_nr, 0, -1, false) or {}
 
-	M.state.custom_buffers[M.state.current_buffer_index].buf_content = current_buffer_content
+	M.state.content_buffers[M.state.current_buffer_index].buf_content = current_buffer_content
 end
 
 M._save_all_to_file = function()
@@ -288,7 +291,7 @@ M._save_all_to_file = function()
 		print("Could not open file for writing: " .. M.state.save_path)
 		return
 	else
-		file:write(vim.inspect(M.state.custom_buffers))
+		file:write(vim.inspect(M.state.content_buffers))
 		file:close()
 	end
 end
@@ -325,18 +328,18 @@ M._generate_new_entry = function()
 
 	---@type ScratchBuffer
 	local new_scratch = {
-		active = true,
+		disabled = false,
 		id = M._generate_id(),
 		timestamp = timestamp,
 		buf_content = new_buf_content,
 	}
 
 	-- insert a whole new entry! CAVE: no remove beforehand!
-	table.insert(M.state.custom_buffers, #M.state.custom_buffers + 1, new_scratch)
+	table.insert(M.state.content_buffers, #M.state.content_buffers + 1, new_scratch)
 end
 
 M._remove_currently_displayed_entry = function()
-	table.remove(M.state.custom_buffers, M.state.current_buffer_index)
+	table.remove(M.state.content_buffers, M.state.current_buffer_index)
 end
 
 M._set_cursor_on_buffer_change = function()
@@ -362,7 +365,7 @@ M._set_all_buffer_keymaps = function(buffer)
 
 	vim.keymap.set("n", "N", function()
 		M._generate_new_entry()
-		M.state.current_buffer_index = #M.state.custom_buffers
+		M.state.current_buffer_index = #M.state.content_buffers
 		M._insert_diff_time()
 		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
 		M._generate_buffer_extmark()
@@ -374,7 +377,7 @@ M._set_all_buffer_keymaps = function(buffer)
 				M._remove_currently_displayed_entry()
 
 				-- check if index is now out-of-bounds
-				M.state.current_buffer_index = math.min(M.state.current_buffer_index, #M.state.custom_buffers)
+				M.state.current_buffer_index = math.min(M.state.current_buffer_index, #M.state.content_buffers)
 				-- M._generate_buffer_content_from_buffer_object(M.state.current_buffer_index)
 				M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
 				M._generate_buffer_extmark()
@@ -387,7 +390,7 @@ M._set_all_buffer_keymaps = function(buffer)
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "L", function()
-		M.state.current_buffer_index = math.min(M.state.current_buffer_index + 1, #M.state.custom_buffers)
+		M.state.current_buffer_index = math.min(M.state.current_buffer_index + 1, #M.state.content_buffers)
 		M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
 		M._generate_buffer_extmark()
 	end, { buffer = buffer })
@@ -404,39 +407,74 @@ M._generate_buffer_extmark = function()
 
 	vim.api.nvim_buf_set_extmark(M.state.buffer_nr, M.state.buffer_namespace, 0, 0, {
 		virt_text = {
-			{ string.format("%d/%d Buffer", M.state.current_buffer_index, #M.state.custom_buffers) },
+			{ string.format("%d/%d Buffer", M.state.current_buffer_index, #M.state.content_buffers) },
 		},
 		virt_text_pos = "eol",
 	})
 end
 
-M._test = function()
-	vim.notify("test3")
-end
-
 M._insert_diff_time = function()
 	local diff_time = M._calculate_time_diff()
-	local buffer = M.state.custom_buffers[#M.state.custom_buffers]
+	local buffer = M.state.content_buffers[#M.state.content_buffers]
 	table.remove(buffer.buf_content, M.state.rows_info.diff_row)
 	table.insert(buffer.buf_content, M.state.rows_info.diff_row, diff_time)
 end
 
 M._filter_content_today = function()
-	local content = M.state.custom_buffers
-
 	local today = M._generate_timestamp()
+	local vis_count = 0
+	local visibile_buffers = {}
 
-	for _, value in ipairs(M.state.custom_buffers) do
-		if
-			value.timestamp.year == today.year
-			and value.timestamp.month == today.month
-			and value.timestamp.day == today.day
-		then
-			value.visible = true
+	for index, value in ipairs(M.state.content_buffers) do
+		-- check for disabled buffers while at it
+		if value.disabled then
+			local entry = table.remove(M.state.content_buffers, index)
+			table.insert(M.state.disabled_buffers, entry)
 		else
-			value.visible = false
+			-- this is the actual check
+			if
+				value.timestamp.year == today.year
+				and value.timestamp.month == today.month
+				and value.timestamp.day == today.day
+			then
+				local vis = math.random(0, 100) > 50
+				if vis then
+					vis_count = vis_count + 1
+				end
+
+				table.insert(visibile_buffers, value)
+			end
 		end
+
+		table.sort(visibile_buffers, M._sort_via_timestamp)
+
+		M.state.visibile_buffers = visibile_buffers
 	end
+
+	vim.notify("total visible: " .. vis_count, 2, {})
+end
+
+---@param entryA osdate
+---@param entryB osdate
+M._sort_via_timestamp = function(entryA, entryB)
+	local time1 = {
+		year = entryA.year or 0,
+		month = entryA.month or 0,
+		day = entryA.day or 0,
+		hour = entryA.hour or 0,
+		min = entryA.min or 0,
+		sec = entryA.sec or 0,
+	}
+	local time2 = {
+		year = entryB.year or 0,
+		month = entryB.month or 0,
+		day = entryB.day or 0,
+		hour = entryB.hour or 0,
+		min = entryB.min or 0,
+		sec = entryB.sec or 0,
+	}
+
+	return os.time(time1) < os.time(time2)
 end
 
 M.today = function()
@@ -447,6 +485,7 @@ M.today = function()
 
 	M._filter_content_today()
 
+	M.state.current_buffer_index = #M.state.visibile_buffers
 	M._generate_buffer_content_from_current_buffer_index_visible_only(M.state.current_buffer_index)
 	M._generate_buffer_extmark()
 
@@ -492,6 +531,10 @@ end)
 
 vim.keymap.set("n", "<leader>0", function()
 	require("workline").window()
+end)
+
+vim.keymap.set("n", "<leader>9", function()
+	require("workline").today()
 end)
 
 M.load()
