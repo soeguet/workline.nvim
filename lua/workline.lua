@@ -6,9 +6,15 @@ local M = {}
 ---@field timestamp? osdate
 ---@field buf_content string[]
 
+---@class RowsInfo
+---@field date_row number
+---@field cursor_row number
+---@field diff_row number
+
 ---@class State
 ---@field buffer_nr? integer
 ---@field save_path string
+---@field rows_info RowsInfo
 ---@field buffer_namespace? integer
 ---@field current_buffer_index integer
 ---@field default_buffer_content string[]
@@ -25,19 +31,24 @@ end
 M.state = {
 	save_path = vim.fn.stdpath("data") .. "/custom_buffer_state.lua",
 	current_buffer_index = 1,
+	rows_info = {
+		date_row = 6,
+		cursor_row = 12,
+		diff_row = 9,
+		enabled_row = 3,
+	},
 	default_buffer_content = {
 		"",
 		"",
-		"# date",
-		"",
-		"",
-		"# date",
-		"",
+		"- [x] enabled",
 		"",
 		"# date",
 		"",
 		"",
-		"# date",
+		"# duration",
+		"",
+		"",
+		"# note",
 		"",
 		"",
 	},
@@ -87,18 +98,41 @@ M.state = {
 	},
 }
 
+M._calculate_time_diff = function()
+	if M.state.current_buffer_index < 2 then
+		return "00:00"
+	end
+
+	local timestamp_current = M.state.custom_buffers[M.state.current_buffer_index]
+	local timestamp_last = M.state.custom_buffers[M.state.current_buffer_index - 1]
+
+	-- Zwei Zeitpunkte definieren
+	local time1 = { year = 2024, month = 12, day = 28, hour = 12, min = 0, sec = 0 }
+	local time2 = { year = 2024, month = 12, day = 29, hour = 14, min = 30, sec = 0 }
+
+	-- In Sekunden umwandeln
+	local timestamp1 = os.time(time1)
+	local timestamp2 = os.time(time2)
+
+	-- Differenz berechnen
+	local diff = os.difftime(timestamp2, timestamp1)
+	print("Zeitdifferenz in Sekunden:", diff)
+
+	local days = math.floor(diff / (24 * 3600))
+	local hours = math.floor((diff % (24 * 3600)) / 3600)
+	local minutes = math.floor((diff % 3600) / 60)
+	local seconds = diff % 60
+
+	print(string.format("Differenz: %d Tage, %d Stunden, %d Minuten, %d Sekunden", days, hours, minutes, seconds))
+
+	return "DIFF"
+end
+
 ---@return osdate
 M._generate_timestamp = function()
 	local date = os.date("*t")
 	---@cast date osdate
 	return date
-end
-
-M.write = function()
-	local current_buffer_content = vim.api.nvim_buf_get_lines(M.state.custom_buffers.buf_nr, 0, -1, false)
-	M.state.custom_buffers.buf_content = current_buffer_content
-
-	M._save_to_file(M.state.save_path, M.state.custom_buffers.buf_content)
 end
 
 M._save_to_file = function(path, table)
@@ -162,31 +196,16 @@ M.check_for_file = function()
 end
 
 M._generate_buffer = function()
-	-- Scratch-Buffer erstellen
-	local buffer = vim.api.nvim_create_buf(false, true) -- unlisted und ohne Datei
+	local buffer = vim.api.nvim_create_buf(false, true)
 
 	M.state.buffer_namespace = vim.api.nvim_create_namespace("workline_page_index")
 
-	-- Optionale Einstellungen für den Scratch-Buffer
 	vim.api.nvim_set_option_value("filetype", "markdown", { buf = buffer })
 	vim.api.nvim_set_option_value("buftype", "nowrite", { buf = buffer })
 	vim.api.nvim_set_option_value("swapfile", false, { buf = buffer })
 	vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {})
 	return buffer
 end
-
--- -@param index integer
--- M._generate_buffer_content_from_buffer_object = function(index)
--- 	---@type ScratchBuffer
--- 	local content = M.state.custom_buffers[index]
---
--- 	if content == nil then
--- 		vim.notify("Buffer does not exist", 2, {})
--- 		return
--- 	end
---
--- 	vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, content.buf_content)
--- end
 
 M._generate_simple_file = function()
 	local file = io.open(M.state.save_path, "w")
@@ -233,13 +252,26 @@ M._save_all_to_file = function()
 	end
 end
 
+M._deep_copy_table = function(random_table)
+	local copy = {}
+	for key, value in pairs(random_table) do
+		if type(value) == "table" then
+			copy[key] = M._deep_copy_table()
+		else
+			copy[key] = value
+		end
+	end
+	return copy
+end
+
 M._generate_new_entry = function()
 	local timestamp = M._generate_timestamp()
-	local new_buf_content = M.state.default_buffer_content
+	local new_buf_content = M._deep_copy_table(M.state.default_buffer_content)
 
+	table.remove(new_buf_content, M.state.rows_info.date_row)
 	table.insert(
 		new_buf_content,
-		4,
+		M.state.rows_info.date_row,
 		string.format(
 			"%02d-%02d-%02d, %02d:%02d",
 			timestamp.year,
@@ -250,6 +282,10 @@ M._generate_new_entry = function()
 		)
 	)
 
+	local diff_time = M._calculate_time_diff()
+	table.remove(new_buf_content, M.state.rows_info.diff_row)
+	table.insert(new_buf_content, M.state.rows_info.diff_row, diff_time)
+
 	---@type ScratchBuffer
 	local new_scratch = {
 		active = true,
@@ -258,15 +294,16 @@ M._generate_new_entry = function()
 		buf_content = new_buf_content,
 	}
 
+	-- insert a whole new entry! CAVE: no remove beforehand!
 	table.insert(M.state.custom_buffers, #M.state.custom_buffers + 1, new_scratch)
 end
 
-M._remove_entry = function()
+M._remove_currently_displayed_entry = function()
 	table.remove(M.state.custom_buffers, M.state.current_buffer_index)
 end
 
 M._set_cursor_on_buffer_change = function()
-	vim.api.nvim_win_set_cursor(0, { 4, 0 })
+	vim.api.nvim_win_set_cursor(0, { M.state.rows_info.cursor_row, 0 })
 end
 
 ---@param buffer integer
@@ -296,7 +333,7 @@ M._set_all_buffer_keymaps = function(buffer)
 	vim.keymap.set("n", "X", function()
 		vim.ui.input({ prompt = "Are you sure? (y/n): " }, function(input)
 			if input == "y" then
-				M._remove_entry()
+				M._remove_currently_displayed_entry()
 
 				-- check if index is now out-of-bounds
 				M.state.current_buffer_index = math.min(M.state.current_buffer_index, #M.state.custom_buffers)
@@ -327,13 +364,23 @@ end
 M._generate_buffer_extmark = function()
 	vim.api.nvim_buf_clear_namespace(M.state.buffer_nr, M.state.buffer_namespace, 0, -1)
 
-	-- Setze den virtuellen Text in der letzten Zeile
 	vim.api.nvim_buf_set_extmark(M.state.buffer_nr, M.state.buffer_namespace, 0, 0, {
 		virt_text = {
 			{ string.format("%d/%d Buffer", M.state.current_buffer_index, #M.state.custom_buffers) },
 		},
-		virt_text_pos = "eol", -- Text am Ende der Zeile anzeigen
+		virt_text_pos = "eol",
 	})
+end
+
+M._test = function()
+	vim.notify("test3")
+end
+M._insert_diff_time = function(index)
+	--
+	local diff_time = M._calculate_time_diff()
+
+	table.remove(M.state.custom_buffers[index], M.state.rows_info.diff_row - 1)
+	table.insert(M.state.custom_buffers[index], M.state.rows_info.diff_row, diff_time)
 end
 
 M.window = function()
@@ -342,7 +389,6 @@ M.window = function()
 		M._set_all_buffer_keymaps(M.state.buffer_nr)
 	end
 
-	-- M._generate_buffer_content_from_buffer_object(M.state.current_buffer_index)
 	M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
 	M._generate_buffer_extmark()
 
@@ -355,24 +401,19 @@ M.window = function()
 		border = "single",
 		style = "minimal",
 	})
+
+	M._set_cursor_on_buffer_change()
 end
 
-vim.keymap.set("n", "<leader>0", "<CMD>lua require('workline').window()<CR>")
+vim.keymap.set("n", "<leader>=", function()
+	package.loaded["workline"] = nil
+	vim.cmd("source %")
+end)
+
+vim.keymap.set("n", "<leader>0", function()
+	require("workline").window()
+end)
 
 M.load()
 
 return M
-
--- vim.api.nvim_create_autocmd("VimEnter", {
--- 	callback = function()
--- 		print("VimEnter")
--- 	 M.state.custom_buffers.buf_content = M._load_from_file(state.save_path)
--- 	end,
--- })
---
--- vim.api.nvim_create_autocmd("VimLeave", {
--- 	callback = function()
--- 		print("VimLeave")
--- 		M._save_to_file(state.save_path, M.state.custom_buffers.buf_content)
--- 	end,
--- })
