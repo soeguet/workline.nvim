@@ -8,6 +8,11 @@ local M = {}
 ---@field timestamp? osdate
 ---@field buf_content BufferContent
 
+---@class TodayState
+---@field buffer_index number[]
+---@field visible_count number
+---@field current_buffer_index number
+
 ---@class BufferContent
 ---@field enabled? string -- something like // - [ ] enabled
 ---@field date? string -- something like // 2024-12-29, 21:41
@@ -15,28 +20,32 @@ local M = {}
 ---@field notes string[]
 
 ---@class TimeDiff
----@field years? integer
----@field months? integer
----@field days? integer
----@field hours? integer
----@field minutes? integer
----@field seconds? integer
+---@field years? number
+---@field months? number
+---@field days? number
+---@field hours? number
+---@field minutes? number
+---@field seconds? number
 
----@class RowsInfo
+---@class DefaultValues
 ---@field date_row number
 ---@field cursor_row number
 ---@field diff_row number
+---@field enabled_row number
+---@field enabled_string string
+---@field disabled_string string
 
 ---@class State
----@field buffer_nr? integer
+---@field buffer_nr? number
 ---@field save_path string
----@field rows_info RowsInfo
----@field buffer_namespace? integer
----@field current_buffer_index integer
+---@field default_values DefaultValues
+---@field buffer_namespace? number
+---@field current_buffer_index number
 ---@field default_buffer_content string[]
 ---@field content_buffers ScratchBuffer[]
 ---@field disabled_buffers ScratchBuffer[]
 ---@field visibile_buffers? ScratchBuffer[]
+---@field today_state? TodayState
 
 ---@return string
 M._generate_id = function()
@@ -49,11 +58,13 @@ end
 M.state = {
 	save_path = vim.fn.stdpath("data") .. "/custom_buffer_state.lua",
 	current_buffer_index = 1,
-	rows_info = {
+	default_values = {
 		date_row = 6,
 		cursor_row = 12,
 		diff_row = 9,
 		enabled_row = 3,
+		enabled_string = "- [x] enabled",
+		disabled_string = "- [ ] enabled",
 	},
 	default_buffer_content = {
 		"defaults are default",
@@ -263,9 +274,9 @@ M._create_new_buffer_content = function(buf_content_full)
 	table.insert(content, "")
 
 	if not buf_content_full.disabled then
-		table.insert(content, "- [x] enabled")
+		table.insert(content, M.state.default_values.enabled_string)
 	else
-		table.insert(content, "- [ ] enabled")
+		table.insert(content, M.state.default_values.disabled_string)
 	end
 
 	table.insert(content, "")
@@ -296,7 +307,7 @@ M._create_new_buffer_content = function(buf_content_full)
 	return content
 end
 
----@param buffer_index integer
+---@param buffer_index number
 M._generate_buffer_content_from_current_buffer_index = function(buffer_index)
 	if #M.state.content_buffers == 0 then
 		vim.notify("#custom_buffers == 0!", 2, {})
@@ -313,7 +324,7 @@ M._generate_buffer_content_from_current_buffer_index = function(buffer_index)
 	end
 end
 
----@param buffer_index integer
+---@param buffer_index number
 M._generate_buffer_content_from_current_buffer_index_visible_only = function(buffer_index)
 	if #M.state.content_buffers == 0 then
 		vim.notify("#custom_buffers == 0!", 2, {})
@@ -324,6 +335,25 @@ M._generate_buffer_content_from_current_buffer_index_visible_only = function(buf
 
 	if buffer ~= nil then
 		vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, buffer.buf_content)
+	else
+		vim.notify("error in updating buffer with new content", 2, {})
+	end
+end
+
+M._generate_buffer_content_today_buffers = function()
+	if #M.state.today_state.buffer_index == 0 then
+		vim.notify("#today_buffers == 0!", 2, {})
+		return
+	end
+
+	-- TODO re-do this
+	-- index in visible_buffers for today number[]
+	local today_index = M.state.today_state.current_buffer_index
+	local buffer_index = M.state.today_state.buffer_index[today_index]
+	local actual_buffer = M.state.content_buffers[buffer_index]
+
+	if actual_buffer ~= nil then
+		M._general_render_buffer_for_today(buffer_index)
 	else
 		vim.notify("error in updating buffer with new content", 2, {})
 	end
@@ -379,10 +409,10 @@ M._generate_new_entry = function()
 	local timestamp = M._generate_timestamp()
 	local new_buf_content = M._deep_copy_table(M.state.default_buffer_content)
 
-	table.remove(new_buf_content, M.state.rows_info.date_row)
+	table.remove(new_buf_content, M.state.default_values.date_row)
 	table.insert(
 		new_buf_content,
-		M.state.rows_info.date_row,
+		M.state.default_values.date_row,
 		string.format(
 			"%02d-%02d-%02d, %02d:%02d",
 			timestamp.year,
@@ -434,7 +464,7 @@ end
 M._set_cursor_on_buffer_change = function(buf_nr)
 	local buffer_max_lines = vim.api.nvim_buf_get_lines(buf_nr, 0, -1, false)
 	-- TODO this feels like a hack
-	vim.api.nvim_win_set_cursor(0, { math.min(M.state.rows_info.cursor_row, #buffer_max_lines), 0 })
+	vim.api.nvim_win_set_cursor(0, { math.min(M.state.default_values.cursor_row, #buffer_max_lines), 0 })
 end
 
 ---general render function for buffers which need to be drawn within the custom buffer
@@ -446,7 +476,17 @@ M._general_render_buffer = function()
 	-- M._set_cursor_on_buffer_change()
 end
 
----@param buffer integer
+---general render function for buffers which need to be drawn within the custom buffer
+---@param index number
+---@return nil
+M._general_render_buffer_for_today = function(index)
+	M._insert_diff_time()
+	M._generate_buffer_content_from_current_buffer_index(index)
+	M._generate_buffer_extmark()
+	-- M._set_cursor_on_buffer_change()
+end
+
+---@param buffer number
 M._set_all_buffer_keymaps = function(buffer)
 	vim.keymap.set("n", "q", function()
 		M._save_changes_inmemory()
@@ -523,36 +563,38 @@ end
 
 M._filter_content_today = function()
 	local today = M._generate_timestamp()
-	local vis_count = 0
-	local visibile_buffers = {}
+	-- reset today-state
+	M.state.today_state = {
+		buffer_index = {},
+		current_buffer_index = 1,
+		visible_count = 0,
+	}
 
-	for index, value in ipairs(M.state.content_buffers) do
-		-- check for disabled buffers while at it
-		if value.disabled then
+	for index = #M.state.content_buffers, 1, -1 do
+		local buffer = M.state.content_buffers[index]
+
+		if buffer.disabled then
+			-- check for disabled buffers first
 			local entry = table.remove(M.state.content_buffers, index)
 			table.insert(M.state.disabled_buffers, entry)
+		elseif
+			buffer.timestamp.year == today.year
+			and buffer.timestamp.month == today.month
+			and buffer.timestamp.day == today.day
+		then
+			-- check for the active, today buffers
+			buffer.visible = true
+			buffer.buf_content.enabled = M.state.default_values.enabled_string
+			M.state.today_state.visible_count = M.state.today_state.visible_count + 1
+			table.insert(M.state.today_state.buffer_index, index)
 		else
-			-- this is the actual check
-			if
-				value.timestamp.year == today.year
-				and value.timestamp.month == today.month
-				and value.timestamp.day == today.day
-			then
-				local vis = math.random(0, 100) > 50
-				if vis then
-					vis_count = vis_count + 1
-				end
-
-				table.insert(visibile_buffers, value)
-			end
+			-- rest
+			buffer.visible = false
+			buffer.buf_content.enabled = M.state.default_values.disabled_string
 		end
-
-		table.sort(visibile_buffers, M._sort_via_timestamp)
-
-		M.state.visibile_buffers = visibile_buffers
 	end
 
-	vim.notify("total visible: " .. vis_count, 2, {})
+	vim.notify("total visible: " .. M.state.today_state.visible_count, 2, {})
 end
 
 ---@param entryA osdate
@@ -586,9 +628,16 @@ M.today = function()
 
 	M._filter_content_today()
 
-	M.state.current_buffer_index = #M.state.visibile_buffers
-	M._generate_buffer_content_from_current_buffer_index_visible_only(M.state.current_buffer_index)
-	M._generate_buffer_extmark()
+	if M.state.today_state.visible_count == 0 then
+		vim.notify("There are no enabled 'today'-buffers", 2, {})
+		return
+	else
+		-- TODO
+		M._generate_buffer_content_today_buffers()
+	end
+
+	-- M._generate_buffer_content_from_current_buffer_index_visible_only(M.state.current_buffer_index)
+	-- M._generate_buffer_extmark()
 
 	vim.api.nvim_open_win(M.state.buffer_nr, true, {
 		relative = "editor",
@@ -600,7 +649,7 @@ M.today = function()
 		style = "minimal",
 	})
 
-	M._set_cursor_on_buffer_change()
+	-- M._set_cursor_on_buffer_change()
 end
 
 M.window = function()
