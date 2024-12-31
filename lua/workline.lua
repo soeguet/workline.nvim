@@ -9,15 +9,19 @@ local M = {}
 ---@field buf_content BufferContent
 
 ---@class TodayState
----@field buffer_index number[]
+---@field buffer_indexes number[]
 ---@field visible_count number
----@field current_buffer_index number
+---@field current_buffer_idx number
 
 ---@class BufferContent
 ---@field enabled? string -- something like // - [ ] enabled
 ---@field date? string -- something like // 2024-12-29, 21:41
 ---@field duration? string -- something like // 0h 9m
 ---@field notes string[]
+
+---@class BufferManager
+---@field all_buffer_nr number
+---@field today_buffer_nr number
 
 ---@class TimeDiff
 ---@field years? number
@@ -36,7 +40,7 @@ local M = {}
 ---@field disabled_string string
 
 ---@class State
----@field buffer_nr? number
+---@field buffer_manager BufferManager
 ---@field save_path string
 ---@field default_values DefaultValues
 ---@field buffer_namespace? number
@@ -58,6 +62,10 @@ end
 M.state = {
 	save_path = vim.fn.stdpath("data") .. "/custom_buffer_state.lua",
 	current_buffer_index = 1,
+	buffer_manager = {
+		all_buffer_nr = 0,
+		today_buffer_nr = 0,
+	},
 	default_values = {
 		date_row = 6,
 		cursor_row = 12,
@@ -307,18 +315,19 @@ M._create_new_buffer_content = function(buf_content_full)
 	return content
 end
 
----@param buffer_index number
-M._generate_buffer_content_from_current_buffer_index = function(buffer_index)
+---@param buffer_nr number
+---@param buffer_idx number
+M._generate_buffer_content_from_current_buffer_index = function(buffer_nr, buffer_idx)
 	if #M.state.content_buffers == 0 then
 		vim.notify("#custom_buffers == 0!", 2, {})
 		return
 	end
 
-	local buffer = M.state.content_buffers[buffer_index]
+	local buffer = M.state.content_buffers[buffer_idx]
 
 	if buffer ~= nil then
 		local content = M._create_new_buffer_content(buffer)
-		vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, content)
+		vim.api.nvim_buf_set_lines(buffer_nr, 0, -1, false, content)
 	else
 		vim.notify("error in updating buffer with new content", 2, {})
 	end
@@ -334,26 +343,26 @@ M._generate_buffer_content_from_current_buffer_index_visible_only = function(buf
 	local buffer = M.state.visibile_buffers[buffer_index]
 
 	if buffer ~= nil then
-		vim.api.nvim_buf_set_lines(M.state.buffer_nr, 0, -1, false, buffer.buf_content)
+		vim.api.nvim_buf_set_lines(M.state.buffer_manager.all_buffer_nr, 0, -1, false, buffer.buf_content)
 	else
 		vim.notify("error in updating buffer with new content", 2, {})
 	end
 end
 
 M._generate_buffer_content_today_buffers = function()
-	if #M.state.today_state.buffer_index == 0 then
+	if #M.state.today_state.buffer_indexes == 0 then
 		vim.notify("#today_buffers == 0!", 2, {})
 		return
 	end
 
 	-- TODO re-do this
 	-- index in visible_buffers for today number[]
-	local today_index = M.state.today_state.current_buffer_index
-	local buffer_index = M.state.today_state.buffer_index[today_index]
-	local actual_buffer = M.state.content_buffers[buffer_index]
+	local today_idx = M.state.today_state.current_buffer_idx
+	local buffer_idx = M.state.today_state.buffer_indexes[today_idx]
+	local actual_buffer = M.state.content_buffers[buffer_idx]
 
 	if actual_buffer ~= nil then
-		M._general_render_buffer_for_today(buffer_index)
+		M._general_render_buffer_for_today(M.state.buffer_manager.today_buffer_nr, buffer_idx)
 	else
 		vim.notify("error in updating buffer with new content", 2, {})
 	end
@@ -361,7 +370,7 @@ end
 
 M._save_changes_inmemory = function()
 	---@type string[]
-	local current_buffer_content = vim.api.nvim_buf_get_lines(M.state.buffer_nr, 0, -1, false) or {}
+	local current_buffer_content = vim.api.nvim_buf_get_lines(M.state.buffer_manager.all_buffer_nr, 0, -1, false) or {}
 	---@type string[]
 	local lines_to_be_saved = {}
 
@@ -471,23 +480,27 @@ end
 ---@return nil
 M._general_render_buffer = function()
 	M._insert_diff_time()
-	M._generate_buffer_content_from_current_buffer_index(M.state.current_buffer_index)
+	M._generate_buffer_content_from_current_buffer_index(
+		M.state.buffer_manager.all_buffer_nr,
+		M.state.current_buffer_index
+	)
 	M._generate_buffer_extmark()
 	-- M._set_cursor_on_buffer_change()
 end
 
 ---general render function for buffers which need to be drawn within the custom buffer
----@param index number
+---@param buffer_nr number
+---@param idx number
 ---@return nil
-M._general_render_buffer_for_today = function(index)
-	M._insert_diff_time()
-	M._generate_buffer_content_from_current_buffer_index(index)
-	M._generate_buffer_extmark()
+M._general_render_buffer_for_today = function(buffer_nr, idx)
+	M._insert_diff_time_today()
+	M._generate_buffer_content_from_current_buffer_index(buffer_nr, idx)
+	M._generate_buffer_extmark_today(buffer_nr)
 	-- M._set_cursor_on_buffer_change()
 end
 
 ---@param buffer number
-M._set_all_buffer_keymaps = function(buffer)
+M._set_all_buffer_keymaps_all = function(buffer)
 	vim.keymap.set("n", "q", function()
 		M._save_changes_inmemory()
 		M._save_all_to_file()
@@ -544,12 +557,92 @@ M._set_all_buffer_keymaps = function(buffer)
 	end, { buffer = buffer })
 end
 
-M._generate_buffer_extmark = function()
-	vim.api.nvim_buf_clear_namespace(M.state.buffer_nr, M.state.buffer_namespace, 0, -1)
+---@param buffer number
+M._set_all_buffer_keymaps_today = function(buffer)
+	vim.keymap.set("n", "q", function()
+		M._save_changes_inmemory()
+		M._save_all_to_file()
+		vim.api.nvim_win_close(0, true)
+	end, { buffer = buffer })
 
-	vim.api.nvim_buf_set_extmark(M.state.buffer_nr, M.state.buffer_namespace, 0, 0, {
+	vim.keymap.set("n", "Q", function()
+		vim.api.nvim_win_close(0, true)
+	end, { buffer = buffer })
+
+	vim.keymap.set("n", "S", function()
+		M._save_changes_inmemory()
+		M._save_all_to_file()
+	end, { buffer = buffer })
+
+	vim.keymap.set("n", "<C-x>", function()
+		M._disable_custom_buffer()
+	end, { buffer = buffer })
+
+	vim.keymap.set("n", "N", function()
+		M._generate_new_entry()
+		M.state.current_buffer_index = #M.state.content_buffers
+		M._general_render_buffer()
+	end, { buffer = buffer })
+
+	vim.keymap.set("n", "X", function()
+		vim.ui.input({ prompt = "Are you sure? (y/n): " }, function(input)
+			if input == "y" then
+				M._remove_currently_displayed_entry()
+
+				-- check if index is now out-of-bounds
+				M.state.current_buffer_index = math.min(M.state.current_buffer_index, #M.state.content_buffers)
+
+				M._general_render_buffer()
+
+				M._save_changes_inmemory()
+				M._save_all_to_file()
+			end
+		end)
+	end, { buffer = buffer })
+
+	vim.keymap.set("n", "L", function()
+		if math.min(M.state.current_buffer_index + 1, #M.state.content_buffers) ~= M.state.current_buffer_index then
+			M.state.current_buffer_index = math.min(M.state.current_buffer_index + 1, #M.state.content_buffers)
+			M._general_render_buffer()
+		end
+	end, { buffer = buffer })
+
+	vim.keymap.set("n", "H", function()
+		M.state.today_state.current_buffer_idx =
+			math.min(M.state.today_state.buffer_indexes + 1, #M.state.today_state.buffer_indexes)
+
+		local all_idx = M.state.today_state.buffer_indexes[M.state.today_state.current_buffer_idx]
+
+		M._general_render_buffer_for_today(M.state.buffer_manager.today_buffer_nr, all_idx)
+	end, { buffer = buffer })
+end
+
+M._generate_buffer_extmark = function()
+	vim.api.nvim_buf_clear_namespace(M.state.buffer_manager.all_buffer_nr, M.state.buffer_namespace, 0, -1)
+
+	vim.api.nvim_buf_set_extmark(M.state.buffer_manager.all_buffer_nr, M.state.buffer_namespace, 0, 0, {
 		virt_text = {
 			{ string.format("%d/%d Buffer", M.state.current_buffer_index, #M.state.content_buffers) },
+		},
+		virt_text_pos = "eol",
+	})
+end
+
+---@param buffer_nr number
+M._generate_buffer_extmark_today = function(buffer_nr)
+	-- vim.api.nvim_buf_clear_namespace(buffer_nr, M.state.buffer_namespace, 0, -1)
+
+	vim.api.nvim_buf_set_extmark(buffer_nr, M.state.buffer_namespace, 0, 0, {
+		virt_text = {
+			{
+				string.format(
+					"%d/%d Buffer - %d/%d Today Files",
+					M.state.current_buffer_index,
+					#M.state.content_buffers,
+					M.state.today_state.current_buffer_idx,
+					#M.state.today_state.buffer_indexes
+				),
+			},
 		},
 		virt_text_pos = "eol",
 	})
@@ -560,13 +653,18 @@ M._insert_diff_time = function()
 	local buffer = M.state.content_buffers[#M.state.content_buffers]
 	buffer.buf_content.duration = duration
 end
+M._insert_diff_time_today = function()
+	local duration = M._calculate_time_diff_duration()
+	local buffer = M.state.content_buffers[#M.state.content_buffers]
+	buffer.buf_content.duration = duration
+end
 
 M._filter_content_today = function()
 	local today = M._generate_timestamp()
 	-- reset today-state
 	M.state.today_state = {
-		buffer_index = {},
-		current_buffer_index = 1,
+		buffer_indexes = {},
+		current_buffer_idx = 1,
 		visible_count = 0,
 	}
 
@@ -586,7 +684,7 @@ M._filter_content_today = function()
 			buffer.visible = true
 			buffer.buf_content.enabled = M.state.default_values.enabled_string
 			M.state.today_state.visible_count = M.state.today_state.visible_count + 1
-			table.insert(M.state.today_state.buffer_index, index)
+			table.insert(M.state.today_state.buffer_indexes, index)
 		else
 			-- rest
 			buffer.visible = false
@@ -621,9 +719,9 @@ M._sort_via_timestamp = function(entryA, entryB)
 end
 
 M.today = function()
-	if M.state.buffer_nr == nil then
-		M.state.buffer_nr = M._generate_buffer()
-		M._set_all_buffer_keymaps(M.state.buffer_nr)
+	if M.state.buffer_manager.today_buffer_nr == nil or M.state.buffer_manager.today_buffer_nr == 0 then
+		M.state.buffer_manager.today_buffer_nr = M._generate_buffer()
+		M._set_all_buffer_keymaps_today(M.state.buffer_manager.today_buffer_nr)
 	end
 
 	M._filter_content_today()
@@ -636,10 +734,7 @@ M.today = function()
 		M._generate_buffer_content_today_buffers()
 	end
 
-	-- M._generate_buffer_content_from_current_buffer_index_visible_only(M.state.current_buffer_index)
-	-- M._generate_buffer_extmark()
-
-	vim.api.nvim_open_win(M.state.buffer_nr, true, {
+	vim.api.nvim_open_win(M.state.buffer_manager.today_buffer_nr, true, {
 		relative = "editor",
 		row = 3,
 		col = 3,
@@ -654,15 +749,17 @@ end
 
 M.window = function()
 	-- check if a dedicated buffer already exists or not
-	if M.state.buffer_nr == nil then
-		M.state.buffer_nr = M._generate_buffer()
-		M._set_all_buffer_keymaps(M.state.buffer_nr)
+	local buffer_nr = M.state.buffer_manager.all_buffer_nr
+	if buffer_nr == nil or buffer_nr == 0 then
+		M.state.buffer_manager.all_buffer_nr = M._generate_buffer()
+		M._set_all_buffer_keymaps_all(M.state.buffer_manager.all_buffer_nr)
+		buffer_nr = M.state.buffer_manager.all_buffer_nr
 	end
 
 	M._move_disabled_buffers_to_disabled_array()
 	M._general_render_buffer()
 
-	vim.api.nvim_open_win(M.state.buffer_nr, true, {
+	vim.api.nvim_open_win(buffer_nr, true, {
 		relative = "editor",
 		row = 3,
 		col = 3,
@@ -672,12 +769,13 @@ M.window = function()
 		style = "minimal",
 	})
 
-	M._set_cursor_on_buffer_change(M.state.buffer_nr)
+	M._set_cursor_on_buffer_change(buffer_nr)
 end
 
 vim.keymap.set("n", "<leader>=", function()
 	package.loaded["workline"] = nil
 	vim.cmd("source %")
+	vim.notify("source % && unload plugin!", 2, {})
 end)
 
 vim.keymap.set("n", "<leader>0", function()
