@@ -490,13 +490,17 @@ M._set_all_buffer_keymaps = function(buffer)
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "L", function()
-		M.state.current_buffer_index = math.min(M.state.current_buffer_index + 1, #M.state.content_buffers)
-		M._general_render_buffer()
+		if math.min(M.state.current_buffer_index + 1, #M.state.content_buffers) ~= M.state.current_buffer_index then
+			M.state.current_buffer_index = math.min(M.state.current_buffer_index + 1, #M.state.content_buffers)
+			M._general_render_buffer()
+		end
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "H", function()
-		M.state.current_buffer_index = math.max(M.state.current_buffer_index - 1, 1)
-		M._general_render_buffer()
+		if math.max(M.state.current_buffer_index - 1, 1) ~= M.state.current_buffer_index then
+			M.state.current_buffer_index = math.max(M.state.current_buffer_index - 1, 1)
+			M._general_render_buffer()
+		end
 	end, { buffer = buffer })
 end
 
