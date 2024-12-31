@@ -601,6 +601,7 @@ M._set_all_buffer_keymaps_today = function(buffer)
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "L", function()
+		vim.notify("L today", 2, {})
 		if math.min(M.state.current_buffer_index + 1, #M.state.content_buffers) ~= M.state.current_buffer_index then
 			M.state.current_buffer_index = math.min(M.state.current_buffer_index + 1, #M.state.content_buffers)
 			M._general_render_buffer()
@@ -608,12 +609,11 @@ M._set_all_buffer_keymaps_today = function(buffer)
 	end, { buffer = buffer })
 
 	vim.keymap.set("n", "H", function()
-		M.state.today_state.current_buffer_idx =
-			math.min(M.state.today_state.buffer_indexes + 1, #M.state.today_state.buffer_indexes)
+		local new_today_idx = math.max(M.state.today_state.current_buffer_idx - 1, 1)
+		local content_buffer_idx = M.state.today_state.buffer_indexes[new_today_idx]
 
-		local all_idx = M.state.today_state.buffer_indexes[M.state.today_state.current_buffer_idx]
-
-		M._general_render_buffer_for_today(M.state.buffer_manager.today_buffer_nr, all_idx)
+		vim.notify("H today new_today_idx: " .. new_today_idx .. ", content_buffer_idx: " .. content_buffer_idx, 2, {})
+		M._general_render_buffer_for_today(M.state.buffer_manager.today_buffer_nr, content_buffer_idx)
 	end, { buffer = buffer })
 end
 
@@ -684,7 +684,7 @@ M._filter_content_today = function()
 			buffer.visible = true
 			buffer.buf_content.enabled = M.state.default_values.enabled_string
 			M.state.today_state.visible_count = M.state.today_state.visible_count + 1
-			table.insert(M.state.today_state.buffer_indexes, index)
+			table.insert(M.state.today_state.buffer_indexes, 1, index)
 		else
 			-- rest
 			buffer.visible = false
